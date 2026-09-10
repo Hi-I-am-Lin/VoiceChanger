@@ -3,84 +3,217 @@
 #include <audioclient.h>
 #include <shellapi.h>
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-int WINAPI wWinMain(HINSTANCE hInstance,
-                    HINSTANCE hPrevInstance,
-                    PWSTR pCmdLine,
-                    int nCmdShow)
+// Declare the window procedure.
+// Windows will call this function when the window receives messages.
+LRESULT CALLBACK WindowProc(
+    HWND hwnd,
+    UINT uMsg,
+    WPARAM wParam,
+    LPARAM lParam
+);
+
+
+int WINAPI wWinMain(
+    HINSTANCE hInstance,
+    HINSTANCE hPrevInstance,
+    PWSTR pCmdLine,
+    int nCmdShow)
 {
-	
-    const wchar_t CLASS_NAME[] = L"Window Class";       // define name for the window class
+    // =========================================================
+    // COM INITIALIZATION
+    // =========================================================
 
-	    
-    WNDCLASS wc = { };                  // Create and initialize a WNDCLASS structure.
+    // Initialize COM for the current thread.
+    HRESULT comInitialCheck =
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-    
-    wc.lpfnWndProc = WindowProc;        // Set the window procedure.
-    
-    wc.hInstance = hInstance;           // Set the application instance.
-    
-    wc.lpszClassName = CLASS_NAME;      // Set the window class name.
-
-    RegisterClass(&wc);                 // pass the address of the WNDCLASS structure to the RegisterClass function
-
-
-    HWND hwnd = CreateWindowEx(
-        0,                              // Optional window styles.
-        CLASS_NAME,                     // Window class
-        L"Learn to Program Windows",    // Window text
-        WS_OVERLAPPEDWINDOW,            // Window style
-
-        // Size and position
-        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-
-        NULL,       // Parent window    
-        NULL,       // Menu
-        hInstance,  // Instance handle
-        NULL        // Additional application data
-    );
-
-    if (hwnd == NULL)
+    // Check whether COM initialization failed.
+    if (FAILED(comInitialCheck))
     {
         return 0;
     }
 
+
+    // =========================================================
+    // AUDIO DEVICE ENUMERATOR
+    // =========================================================
+
+    // Pointer to the COM object used to find audio devices.
+    IMMDeviceEnumerator* pEnumerator = nullptr;
+
+    // Create an MMDeviceEnumerator COM object and obtain
+    // its IMMDeviceEnumerator interface.
+    comInitialCheck = CoCreateInstance(
+        __uuidof(MMDeviceEnumerator),
+        nullptr,
+        CLSCTX_ALL,
+        __uuidof(IMMDeviceEnumerator),
+        reinterpret_cast<void**>(&pEnumerator)
+    );
+
+    if (FAILED(comInitialCheck))
+    {
+        CoUninitialize();
+        return 0;
+    }
+
+
+    // =========================================================
+    // GET DEFAULT MICROPHONE
+    // =========================================================
+
+    // Pointer that will receive the default capture device.
+    IMMDevice* firstMicrophone = nullptr;
+
+    // Find the default audio capture device (microphone).
+    comInitialCheck = pEnumerator->GetDefaultAudioEndpoint(
+        eCapture,          // Request an input/capture device.
+        eConsole,          // Use the default console audio device.
+        &firstMicrophone   // Store the resulting device pointer here.
+    );
+
+    if (FAILED(comInitialCheck))
+    {
+        pEnumerator->Release();
+        CoUninitialize();
+        return 0;
+    }
+
+
+    // =========================================================
+    // WINDOW CLASS
+    // =========================================================
+
+    // Define the name of our window class.
+    const wchar_t CLASS_NAME[] = L"Window Class";
+
+    // Create and zero-initialize a WNDCLASS structure.
+    WNDCLASS wc = { };
+
+    // Set the function that will process window messages.
+    wc.lpfnWndProc = WindowProc;
+
+    // Associate this window class with this application instance.
+    wc.hInstance = hInstance;
+
+    // Set the name of the window class.
+    wc.lpszClassName = CLASS_NAME;
+
+    // Register the window class with Windows.
+    RegisterClass(&wc);
+
+
+    // =========================================================
+    // CREATE WINDOW
+    // =========================================================
+
+    // Create an actual window based on the registered window class.
+    HWND hwnd = CreateWindowEx(
+        0,
+        CLASS_NAME,
+        L"Learn to Program Windows",
+        WS_OVERLAPPEDWINDOW,
+
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+
+        NULL,
+        NULL,
+        hInstance,
+        NULL
+    );
+
+    // Check whether window creation failed.
+    if (hwnd == NULL)
+    {
+        firstMicrophone->Release();
+        pEnumerator->Release();
+        CoUninitialize();
+
+        return 0;
+    }
+
+    // Make the window visible.
     ShowWindow(hwnd, nCmdShow);
 
-    // Run the message loop.
+
+    // =========================================================
+    // MESSAGE LOOP
+    // =========================================================
 
     MSG msg = { };
+
+    // Keep receiving and processing Windows messages
+    // until WM_QUIT is received.
     while (GetMessage(&msg, NULL, 0, 0) > 0)
     {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
+
+    // =========================================================
+    // CLEANUP
+    // =========================================================
+
+    // Release the microphone COM interface.
+    firstMicrophone->Release();
+
+    // Release the audio device enumerator COM interface.
+    pEnumerator->Release();
+
+    // Uninitialize COM for this thread.
+    CoUninitialize();
+
     return 0;
 }
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+
+// =========================================================
+// WINDOW PROCEDURE
+// =========================================================
+
+// Windows calls this function when this window receives a message.
+LRESULT CALLBACK WindowProc(
+    HWND hwnd,
+    UINT uMsg,
+    WPARAM wParam,
+    LPARAM lParam)
 {
     switch (uMsg)
     {
     case WM_DESTROY:
+
+        // Tell the message loop that the application should exit.
         PostQuitMessage(0);
+
         return 0;
+
 
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
+
+        // Begin painting the window.
         HDC hdc = BeginPaint(hwnd, &ps);
 
-        // All painting occurs here, between BeginPaint and EndPaint.
+        // Fill the window background.
+        FillRect(
+            hdc,
+            &ps.rcPaint,
+            (HBRUSH)(COLOR_WINDOW + 1)
+        );
 
-        FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
-
+        // Finish painting.
         EndPaint(hwnd, &ps);
     }
-    return 0;
 
+    return 0;
     }
+
+    // Let Windows handle all messages that we did not process.
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
