@@ -25,11 +25,13 @@ int WINAPI wWinMain(
     // =========================================================
 
     // Initialize COM for the current thread.
-    HRESULT comInitialCheck =
-        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HRESULT hr = CoInitializeEx(
+        nullptr,
+        COINIT_MULTITHREADED
+    );
 
     // Check whether COM initialization failed.
-    if (FAILED(comInitialCheck))
+    if (FAILED(hr))
     {
         return 0;
     }
@@ -44,15 +46,15 @@ int WINAPI wWinMain(
 
     // Create an MMDeviceEnumerator COM object and obtain
     // its IMMDeviceEnumerator interface.
-    comInitialCheck = CoCreateInstance(
+    hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
-        nullptr,
+        NULL,
         CLSCTX_ALL,
         __uuidof(IMMDeviceEnumerator),
-        reinterpret_cast<void**>(&pEnumerator)
+        (void**)&pEnumerator
     );
 
-    if (FAILED(comInitialCheck))
+    if (FAILED(hr))
     {
         CoUninitialize();
         return 0;
@@ -67,18 +69,57 @@ int WINAPI wWinMain(
     IMMDevice* firstMicrophone = nullptr;
 
     // Find the default audio capture device (microphone).
-    comInitialCheck = pEnumerator->GetDefaultAudioEndpoint(
+    hr = pEnumerator->GetDefaultAudioEndpoint(
         eCapture,          // Request an input/capture device.
         eConsole,          // Use the default console audio device.
         &firstMicrophone   // Store the resulting device pointer here.
     );
 
-    if (FAILED(comInitialCheck))
+    if (FAILED(hr))
     {
         pEnumerator->Release();
         CoUninitialize();
         return 0;
     }
+
+    // Pointer to the IAudioClient interface.
+    // It is initialized to nullptr because the interface has not been obtained yet.
+    IAudioClient* pAudioClient = nullptr;
+
+    // Activate the IAudioClient interface on the selected microphone endpoint.
+    // If successful, pAudioClient will point to the audio client object.
+    hr = firstMicrophone->Activate(
+        __uuidof(IAudioClient), // Interface that we want to obtain
+        CLSCTX_ALL,             // Allow the COM object to run in any valid context
+        nullptr,                // No additional activation parameters
+        reinterpret_cast<void**>(&pAudioClient)
+        // Receives the IAudioClient interface pointer
+    );
+
+    // Pointer used to store the audio engine's default mixing format.
+    // The format contains information such as sample rate, channel count,
+    // and bits per sample.
+    WAVEFORMATEX* pWaveFormat = nullptr;
+
+    // Get the default audio format used by the Windows audio engine
+    // when the microphone is operating in shared mode.
+    hr = pAudioClient->GetMixFormat(&pWaveFormat);
+
+    // Requested buffer duration.
+    // REFERENCE_TIME uses units of 100 nanoseconds.
+    // 10,000,000 ¡Á 100 nanoseconds = 1 second.
+    REFERENCE_TIME bufferDuration = 10'000'000;
+
+    // Initialize the microphone's audio stream.
+    hr = pAudioClient->Initialize(
+        AUDCLNT_SHAREMODE_SHARED, // Share the microphone with other applications
+        0,                        // Do not enable additional stream flags
+        bufferDuration,           // Requested buffer duration: 1 second
+        0,                        // Must be 0 when using shared mode
+        pWaveFormat,              // Use the audio engine's default mixing format
+        nullptr                   // Use the default audio session
+    );
+
 
 
     // =========================================================
