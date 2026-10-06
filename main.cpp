@@ -200,10 +200,10 @@ int WINAPI wWinMain(
     // =========================================================
 
     // Create an actual window based on the registered window class.
-    HWND hwnd = CreateWindowEx(
+    HWND hwnd = CreateWindowExW(
         0,
         CLASS_NAME,
-        L"Learn to Program Windows",
+        L"Hold Space to capture",
         WS_OVERLAPPEDWINDOW,
 
         CW_USEDEFAULT,
@@ -396,5 +396,5 @@ LRESULT CALLBACK WindowProc(
     }
 
     // Let Windows handle all messages that we did not process.
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
