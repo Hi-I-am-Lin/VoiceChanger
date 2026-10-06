@@ -96,6 +96,14 @@ int WINAPI wWinMain(
         // Receives the IAudioClient interface pointer
     );
 
+    if (FAILED(hr))
+    {
+        firstMicrophone->Release();
+        pEnumerator->Release();
+        CoUninitialize();
+        return 1;
+    }
+
     // Pointer used to store the audio engine's default mixing format.
     // The format contains information such as sample rate, channel count,
     // and bits per sample.
@@ -104,6 +112,15 @@ int WINAPI wWinMain(
     // Get the default audio format used by the Windows audio engine
     // when the microphone is operating in shared mode.
     hr = pAudioClient->GetMixFormat(&pWaveFormat);
+
+    if (FAILED(hr))
+    {
+        pAudioClient->Release();
+        firstMicrophone->Release();
+        pEnumerator->Release();
+        CoUninitialize();
+        return 1;
+    }
 
     // Requested buffer duration.
     // REFERENCE_TIME uses units of 100 nanoseconds.
@@ -120,7 +137,33 @@ int WINAPI wWinMain(
         nullptr                   // Use the default audio session
     );
 
+    CoTaskMemFree(pWaveFormat);
+    pWaveFormat = nullptr;
 
+    if (FAILED(hr))
+    {
+        pAudioClient->Release();
+        firstMicrophone->Release();
+        pEnumerator->Release();
+        CoUninitialize();
+        return 1;
+    }
+
+    IAudioCaptureClient* pCaptureClient = nullptr;
+
+    hr = pAudioClient->GetService(
+        __uuidof(IAudioCaptureClient),
+        reinterpret_cast<void**>(&pCaptureClient)
+    );
+
+    if (FAILED(hr))
+    {
+        pAudioClient->Release();
+        firstMicrophone->Release();
+        pEnumerator->Release();
+        CoUninitialize();
+        return 1;
+    }
 
     // =========================================================
     // WINDOW CLASS
@@ -168,13 +211,15 @@ int WINAPI wWinMain(
     );
 
     // Check whether window creation failed.
-    if (hwnd == NULL)
+    if (hwnd == nullptr)
     {
+        pCaptureClient->Release();
+        pAudioClient->Release();
         firstMicrophone->Release();
         pEnumerator->Release();
         CoUninitialize();
 
-        return 0;
+        return 1;
     }
 
     // Make the window visible.
@@ -199,14 +244,10 @@ int WINAPI wWinMain(
     // =========================================================
     // CLEANUP
     // =========================================================
-
-    // Release the microphone COM interface.
+    pCaptureClient->Release();
+    pAudioClient->Release();
     firstMicrophone->Release();
-
-    // Release the audio device enumerator COM interface.
     pEnumerator->Release();
-
-    // Uninitialize COM for this thread.
     CoUninitialize();
 
     return 0;
