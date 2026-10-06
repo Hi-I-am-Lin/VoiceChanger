@@ -3,6 +3,11 @@
 #include <audioclient.h>
 #include <shellapi.h>
 
+struct AudioState
+{
+    IAudioClient* audioClient = nullptr;
+    bool isRecording = false;
+};
 
 // Declare the window procedure.
 // Windows will call this function when the window receives messages.
@@ -187,6 +192,8 @@ int WINAPI wWinMain(
     // Register the window class with Windows.
     RegisterClass(&wc);
 
+    AudioState audioState;
+    audioState.audioClient = pAudioClient;
 
     // =========================================================
     // CREATE WINDOW
@@ -207,7 +214,7 @@ int WINAPI wWinMain(
         NULL,
         NULL,
         hInstance,
-        NULL
+        &audioState
     );
 
     // Check whether window creation failed.
@@ -265,15 +272,107 @@ LRESULT CALLBACK WindowProc(
     WPARAM wParam,
     LPARAM lParam)
 {
+
+    if (uMsg == WM_NCCREATE)
+    {
+        CREATESTRUCTW* createInfo =
+            reinterpret_cast<CREATESTRUCTW*>(lParam);
+
+        AudioState* state =
+            static_cast<AudioState*>(createInfo->lpCreateParams);
+
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(state)
+        );
+
+        return TRUE;
+    }
+
+    AudioState* state = reinterpret_cast<AudioState*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+        );
+
     switch (uMsg)
     {
-    case WM_DESTROY:
+    case WM_KEYDOWN:
+    {
+        if (wParam == VK_SPACE && state)
+        {
+            if (!state->isRecording)
+            {
+                HRESULT hr = state->audioClient->Start();
 
-        // Tell the message loop that the application should exit.
-        PostQuitMessage(0);
+                if (SUCCEEDED(hr))
+                {
+                    state->isRecording = true;
+                    SetWindowTextW(hwnd, L"Capturing...");
+                }
+                else
+                {
+                    SetWindowTextW(hwnd, L"Failed to start capture");
+                }
+            }
+
+            return 0;
+        }
+
+        break;
+    }
+
+    case WM_KEYUP:
+    {
+        if (wParam == VK_SPACE && state)
+        {
+            if (state->isRecording)
+            {
+                HRESULT hr = state->audioClient->Stop();
+
+                if (SUCCEEDED(hr))
+                {
+                    state->isRecording = false;
+                    SetWindowTextW(hwnd, L"Hold Space to capture");
+                }
+                else
+                {
+                    SetWindowTextW(hwnd, L"Failed to stop capture");
+                }
+            }
+
+            return 0;
+        }
+
+        break;
+    }
+
+    case WM_KILLFOCUS:
+    {
+        if (state && state->isRecording)
+        {
+            HRESULT hr = state->audioClient->Stop();
+
+            if (SUCCEEDED(hr))
+            {
+                state->isRecording = false;
+                SetWindowTextW(hwnd, L"Hold Space to capture");
+            }
+        }
 
         return 0;
+    }
 
+    case WM_DESTROY:
+    {
+        if (state && state->isRecording)
+        {
+            state->audioClient->Stop();
+            state->isRecording = false;
+        }
+
+        PostQuitMessage(0);
+        return 0;
+    }
 
     case WM_PAINT:
     {
