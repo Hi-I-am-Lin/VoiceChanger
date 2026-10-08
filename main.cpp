@@ -9,8 +9,7 @@ struct AudioState
     bool isRecording = false;
 };
 
-// Declare the window procedure.
-// Windows will call this function when the window receives messages.
+// Forward declaration of the window procedure
 LRESULT CALLBACK WindowProc(
     HWND hwnd,
     UINT uMsg,
@@ -261,11 +260,8 @@ int WINAPI wWinMain(
 }
 
 
-// =========================================================
-// WINDOW PROCEDURE
-// =========================================================
-
-// Windows calls this function when this window receives a message.
+// Handle window messages
+// Including keyboard input and window closing
 LRESULT CALLBACK WindowProc(
     HWND hwnd,
     UINT uMsg,
