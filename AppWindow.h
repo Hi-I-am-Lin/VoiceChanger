@@ -2,5 +2,5 @@
 
 #include <windows.h>
 
-struct AudioState;
-HWND CreateAppWindow(HINSTANCE hInstance, AudioState& audioState);
+class AudioEngine;
+HWND CreateAppWindow(HINSTANCE hInstance, AudioEngine& engine);

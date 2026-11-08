@@ -1,242 +1,223 @@
 #include "AppWindow.h"
-#include "AudioCapture.h"
+#include "AudioEngine.h"
 
-#include <string>
-#include <new>
+#include <algorithm>
+#include <cmath>
 #include <cwchar>
+#include <string>
 
 namespace
 {
-constexpr UINT_PTR CAPTURE_TIMER_ID = 1;
-constexpr UINT CAPTURE_TIMER_INTERVAL_MS = 20;
+constexpr UINT_PTR UI_TIMER_ID = 1;
+constexpr UINT UI_TIMER_INTERVAL_MS = 50;
+constexpr float MIN_SEMITONES = -12.0f;
+constexpr float MAX_SEMITONES = 12.0f;
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-
-void UpdateCaptureTitle(HWND hwnd, const AudioState* state, const wchar_t* status)
+struct WindowState
 {
-    const std::wstring title = std::wstring(status)
-        + L" | Bytes: " + std::to_wstring(state->recordedAudio.size())
-        + L" | Discontinuity flags: " + std::to_wstring(state->discontinuityFlags);
-    SetWindowTextW(hwnd, title.c_str());
-}
+    AudioEngine* engine = nullptr;
+    bool waitingForKey = false;  // True after F2, until the next key press.
+};
 
-void ShowCaptureError(HWND hwnd, const wchar_t* operation, HRESULT hr)
+std::wstring KeyName(int virtualKey)
 {
-    wchar_t errorText[160] = {};
-    swprintf_s(errorText, 160, L"%ls failed: HRESULT 0x%08lX",
-        operation, static_cast<unsigned long>(hr));
-    SetWindowTextW(hwnd, errorText);
-}
-
-void StopCapture(HWND hwnd, AudioState* state)
-{
-    if (!state || !state->isRecording)
+    UINT scanCode = MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC);
+    switch (virtualKey)
     {
-        return;
+    // These keys share scan codes with the number pad unless marked as extended.
+    case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
+    case VK_PRIOR: case VK_NEXT: case VK_LEFT: case VK_RIGHT:
+    case VK_UP: case VK_DOWN: case VK_RCONTROL: case VK_RMENU:
+        scanCode |= 0x100;
+        break;
     }
 
-    HRESULT hr = state->audioClient->Stop();
-    if (FAILED(hr))
+    wchar_t name[64] = {};
+    if (scanCode != 0 && GetKeyNameTextW(static_cast<LONG>(scanCode << 16), name, 64) > 0)
     {
-        ShowCaptureError(hwnd, L"Stop", hr);
-        return;
+        return name;
     }
-
-    KillTimer(hwnd, CAPTURE_TIMER_ID);
-    state->isRecording = false;
-
-    // Stop freezes capture. Read the final pending packets before returning.
-    hr = ReadAvailableAudio(state);
-    if (FAILED(hr))
-    {
-        ShowCaptureError(hwnd, L"Final read", hr);
-        return;
-    }
-
-    UpdateCaptureTitle(hwnd, state,
-        hr == S_FALSE ? L"30-second limit reached" : L"Stopped - hold Space for a new recording");
+    swprintf_s(name, L"Key 0x%02X", virtualKey);
+    return name;
 }
 
+std::wstring BuildStatusText(const WindowState& ws)
+{
+    const AudioEngine& engine = *ws.engine;
+    wchar_t line[512] = {};
+    std::wstring text;
+
+    swprintf_s(line, L"Output:  %ls%ls\n", engine.OutputName().c_str(),
+        engine.UsingNamedOutput() ? L""
+        : L"\n         (virtual cable not found - test mode, use headphones to avoid feedback)");
+    text += line;
+    swprintf_s(line, L"Input:   %ls\n\n", engine.InputName().c_str());
+    text += line;
+
+    if (ws.waitingForKey)
+    {
+        text += L"Push-to-talk: press the new key now (Esc to cancel)\n";
+    }
+    else
+    {
+        swprintf_s(line, L"Push-to-talk: hold %ls  (F2 to change)\n",
+            KeyName(engine.PushToTalkKey()).c_str());
+        text += line;
+    }
+
+    swprintf_s(line, L"Pitch:   %+.0f semitones  (Up/Down to adjust, 0 to reset)\n\n",
+        engine.Semitones());
+    text += line;
+
+    if (!engine.IsRunning())
+    {
+        swprintf_s(line, L"Status:  STOPPED - audio error 0x%08lX (restart the app)\n",
+            static_cast<unsigned long>(engine.ThreadError()));
+    }
+    else
+    {
+        swprintf_s(line, L"Status:  %ls\n", engine.IsTalking() ? L"TALKING" : L"muted");
+    }
+    text += line;
+
+    swprintf_s(line, L"Underruns: %u   Dropped blocks: %u   Discontinuities: %u",
+        engine.Underruns(), engine.DroppedBlocks(), engine.Discontinuities());
+    text += line;
+    return text;
+}
+
+void ChangePitch(AudioEngine& engine, float delta)
+{
+    const float value = delta == 0.0f ? 0.0f : engine.Semitones() + delta;
+    engine.SetSemitones(std::clamp(std::round(value), MIN_SEMITONES, MAX_SEMITONES));
+}
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     if (uMsg == WM_NCCREATE)
     {
         auto* createInfo = reinterpret_cast<CREATESTRUCTW*>(lParam);
-        auto* state = static_cast<AudioState*>(createInfo->lpCreateParams);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
-        return TRUE;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(createInfo->lpCreateParams));
+        return DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
 
-    auto* state = reinterpret_cast<AudioState*>(
-        GetWindowLongPtrW(hwnd, GWLP_USERDATA)
-        );
+    auto* ws = reinterpret_cast<WindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (!ws)
+    {
+        return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    }
 
     switch (uMsg)
     {
     case WM_KEYDOWN:
-        if (wParam == VK_SPACE && state)
+    case WM_SYSKEYDOWN:
+        if (ws->waitingForKey)
         {
-            // Ignore auto-repeat, including after the 30-second recording limit.
-            if (state->isRecording || (lParam & (static_cast<LPARAM>(1) << 30)))
+            if (wParam != VK_ESCAPE)
             {
-                return 0;
+                ws->engine->SetPushToTalkKey(static_cast<int>(wParam));
             }
-
-            // Reset pending Windows data before starting a fresh recording.
-            HRESULT hr = state->audioClient->Reset();
-            if (FAILED(hr))
+            ws->waitingForKey = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        if (uMsg == WM_KEYDOWN)
+        {
+            switch (wParam)
             {
-                ShowCaptureError(hwnd, L"Reset", hr);
-                return 0;
+            case VK_F2:  ws->waitingForKey = true;          break;
+            case VK_UP:  ChangePitch(*ws->engine, 1.0f);    break;
+            case VK_DOWN: ChangePitch(*ws->engine, -1.0f);  break;
+            case '0': case VK_NUMPAD0: ChangePitch(*ws->engine, 0.0f); break;
+            default: return 0;
             }
-
-            // Each new press replaces the previous recording.
-            state->recordedAudio.clear();
-            state->discontinuityFlags = 0;
-            try
-            {
-                // Allocate before capture starts to avoid growth during each packet.
-                state->recordedAudio.reserve(state->maxRecordingBytes);
-            }
-            catch (const std::bad_alloc&)
-            {
-                ShowCaptureError(hwnd, L"Reserve recording storage", E_OUTOFMEMORY);
-                return 0;
-            }
-
-            // A timer posts WM_TIMER messages; it is not a precise audio clock.
-            if (SetTimer(hwnd, CAPTURE_TIMER_ID,
-                CAPTURE_TIMER_INTERVAL_MS, nullptr) == 0)
-            {
-                SetWindowTextW(hwnd, L"Failed to create capture timer");
-                return 0;
-            }
-
-            hr = state->audioClient->Start();
-            if (FAILED(hr))
-            {
-                KillTimer(hwnd, CAPTURE_TIMER_ID);
-                ShowCaptureError(hwnd, L"Start", hr);
-                return 0;
-            }
-
-            state->isRecording = true;
-            UpdateCaptureTitle(hwnd, state, L"Capturing");
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         break;
 
     case WM_TIMER:
-        if (wParam == CAPTURE_TIMER_ID)
+        if (wParam == UI_TIMER_ID)
         {
-            if (state && state->isRecording)
-            {
-                HRESULT hr = ReadAvailableAudio(state);
-                if (FAILED(hr))
-                {
-                    // Keep the error visible. Restart the app if Stop also fails.
-                    KillTimer(hwnd, CAPTURE_TIMER_ID);
-                    HRESULT stopResult = state->audioClient->Stop();
-                    if (SUCCEEDED(stopResult))
-                    {
-                        state->isRecording = false;
-                    }
-                    ShowCaptureError(hwnd, L"Read audio", hr);
-                }
-                else if (hr == S_FALSE)
-                {
-                    StopCapture(hwnd, state);
-                }
-                else
-                {
-                    UpdateCaptureTitle(hwnd, state, L"Capturing");
-                }
-            }
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         break;
 
-    case WM_KEYUP:
-        if (wParam == VK_SPACE && state)
-        {
-            StopCapture(hwnd, state);
-            return 0;
-        }
-        break;
-
-    case WM_KILLFOCUS:
-        // Preserve the original hold-to-record behavior for this prototype.
-        StopCapture(hwnd, state);
-        return 0;
-
-    case WM_DESTROY:
-        KillTimer(hwnd, CAPTURE_TIMER_ID);
-        if (state && state->isRecording)
-        {
-            if (SUCCEEDED(state->audioClient->Stop()))
-            {
-                state->isRecording = false;
-            }
-        }
-        PostQuitMessage(0);
-        return 0;
+    case WM_ERASEBKGND:
+        return 1;  // WM_PAINT fills the whole client area, which avoids flicker.
 
     case WM_PAINT:
     {
         PAINTSTRUCT ps = {};
         HDC hdc = BeginPaint(hwnd, &ps);
-        FillRect(hdc, &ps.rcPaint, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        RECT client = {};
+        GetClientRect(hwnd, &client);
+
+        // Draw off-screen, then copy, so the 50 ms refresh does not flicker.
+        HDC memDc = CreateCompatibleDC(hdc);
+        HBITMAP bitmap = CreateCompatibleBitmap(hdc, client.right, client.bottom);
+        HGDIOBJ oldBitmap = SelectObject(memDc, bitmap);
+        HGDIOBJ oldFont = SelectObject(memDc, GetStockObject(DEFAULT_GUI_FONT));
+
+        FillRect(memDc, &client, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        SetBkMode(memDc, TRANSPARENT);
+        RECT textRect = client;
+        InflateRect(&textRect, -16, -16);
+        const std::wstring text = BuildStatusText(*ws);
+        DrawTextW(memDc, text.c_str(), -1, &textRect, DT_LEFT | DT_TOP | DT_EXPANDTABS);
+
+        BitBlt(hdc, 0, 0, client.right, client.bottom, memDc, 0, 0, SRCCOPY);
+        SelectObject(memDc, oldFont);
+        SelectObject(memDc, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(memDc);
         EndPaint(hwnd, &ps);
+        return 0;
     }
-    return 0;
+
+    case WM_DESTROY:
+        KillTimer(hwnd, UI_TIMER_ID);
+        PostQuitMessage(0);
+        return 0;
+
+    case WM_NCDESTROY:
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        delete ws;
+        return 0;
     }
 
     return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
-
 }
 
-HWND CreateAppWindow(HINSTANCE hInstance, AudioState& audioState)
+HWND CreateAppWindow(HINSTANCE hInstance, AudioEngine& engine)
 {
-    // Define the name of our window class.
-    const wchar_t CLASS_NAME[] = L"Window Class";
+    const wchar_t CLASS_NAME[] = L"VoiceChangerWindow";
 
-    // Create and zero-initialize a WNDCLASS structure.
-    WNDCLASSW wc = { };
-
-    // Set the function that will process window messages.
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
-
-    // Associate this window class with this application instance.
     wc.hInstance = hInstance;
-
-    // Set the name of the window class.
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = CLASS_NAME;
-
-    // Register the window class with Windows.
     if (!RegisterClassW(&wc))
     {
         return nullptr;
     }
 
-    // Create an actual window based on the registered window class.
-    HWND hwnd = CreateWindowExW(
-        0,
-        CLASS_NAME,
-        L"Hold Space to capture",
+    // Freed in WM_NCDESTROY.
+    auto* state = new WindowState{ &engine };
+    HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"VoiceChanger",
         WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 640, 280,
+        nullptr, nullptr, hInstance, state);
+    if (!hwnd)
+    {
+        // If WM_NCCREATE ran, WM_NCDESTROY already freed `state`; leak rather than double-free.
+        return nullptr;
+    }
 
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-
-        NULL,
-        NULL,
-        hInstance,
-        &audioState
-    );
-
+    SetTimer(hwnd, UI_TIMER_ID, UI_TIMER_INTERVAL_MS, nullptr);
     return hwnd;
 }

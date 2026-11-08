@@ -1,33 +1,51 @@
 #include "AppWindow.h"
-#include "AudioCapture.h"
+#include "AudioEngine.h"
 
 namespace
 {
-int RunApplication(HINSTANCE hInstance, int nCmdShow)
-{
-    AudioState audioState;
-    const int initializationResult = InitializeAudio(audioState);
-    if (initializationResult != -1)
+    // Playback device to send the changed voice to. VB-Audio Virtual Cable names it
+    // "CABLE Input (VB-Audio Virtual Cable)". Without it, the default speakers are used.
+    constexpr wchar_t OUTPUT_DEVICE_HINT[] = L"CABLE Input";
+
+    void ShowError(const std::wstring& message)
     {
-        return initializationResult;
+        MessageBoxW(nullptr, message.c_str(), L"VoiceChanger", MB_OK | MB_ICONERROR);
     }
 
-    HWND hwnd = CreateAppWindow(hInstance, audioState);
-    if (!hwnd)
+    int RunApplication(HINSTANCE hInstance, int nCmdShow)
     {
-        return 1;
-    }
-    ShowWindow(hwnd, nCmdShow);
+        AudioEngine engine;
+        if (!engine.Initialize(OUTPUT_DEVICE_HINT))
+        {
+            ShowError(engine.ErrorMessage());
+            return 1;
+        }
 
-    MSG msg = {};
-    BOOL messageResult = 0;
-    while ((messageResult = GetMessageW(&msg, nullptr, 0, 0)) > 0)
-    {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        HWND hwnd = CreateAppWindow(hInstance, engine);
+        if (!hwnd)
+        {
+            return 1;
+        }
+
+        if (!engine.Start())
+        {
+            ShowError(engine.ErrorMessage());
+            DestroyWindow(hwnd);
+            return 1;
+        }
+        ShowWindow(hwnd, nCmdShow);
+
+        MSG msg = {};
+        BOOL messageResult = 0;
+        while ((messageResult = GetMessageW(&msg, nullptr, 0, 0)) > 0)
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        engine.Stop();
+        return messageResult == -1 ? 1 : 0;
     }
-    return messageResult == -1 ? 1 : 0;
-}
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
@@ -35,7 +53,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr))
     {
-        return 0;
+        return 1;
     }
 
     // Audio resources are destroyed before COM is uninitialized.

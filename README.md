@@ -1,6 +1,29 @@
 # VoiceChanger
 
-A voice changer project built with C++ and Windows WASAPI. It is currently a microphone capture prototype: hold Space while the window has focus to record, and release it to stop. Each recording is limited to 30 seconds. Audio is stored only in memory; voice effects and virtual microphone output are not yet implemented.
+A real-time voice changer built with C++ and Windows WASAPI. It reads the default microphone, shifts the pitch, and plays the result into a virtual audio cable. Chat or recording apps use the cable as their microphone, so they hear the changed voice while a push-to-talk key is held (silence otherwise).
+
+```
+Real microphone -> VoiceChanger (pitch shift, push-to-talk) -> "CABLE Input" (playback)
+                                                               "CABLE Output" (recording) -> Discord / WeChat / QQ ...
+```
+
+## Setup
+
+1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free) and reboot.
+2. In Windows sound settings, keep your **real microphone** as the default recording device.
+3. In the chat app, select **CABLE Output (VB-Audio Virtual Cable)** as the microphone.
+4. Run VoiceChanger. The window shows which devices are in use.
+
+If no device named "CABLE Input" exists, VoiceChanger plays to the default speakers instead (test mode). Use headphones then, or the speakers will feed back into the microphone.
+
+## Controls
+
+The push-to-talk key works while any app has focus. The other keys work only while the VoiceChanger window has focus.
+
+- Hold **F8** (default) to talk. Press **F2** in the window, then any key, to change it.
+- **Up / Down**: pitch +1 / -1 semitone (range -12 to +12). **0**: reset.
+
+End-to-end latency is roughly 20 ms (pitch shifter) + 30 ms (output queue) + device buffers.
 
 ## Requirements
 
@@ -22,7 +45,7 @@ cmake --build build --config Release
 
 For a debug build, replace `Release` with `Debug`. For a 32-bit build, use a separate build directory and replace `-A x64` with `-A Win32`.
 
-If the compiler or Windows SDK cannot be found, check the components listed above in Visual Studio Installer. Before running the application, ensure that a default microphone is available and desktop apps are allowed to access it.
+If the compiler or Windows SDK cannot be found, check the components listed above in Visual Studio Installer. Before running the application, ensure that a default microphone is available and desktop apps are allowed to access it (Settings > Privacy & security > Microphone).
 
 ## VS Code
 
@@ -36,8 +59,9 @@ You can also run the build commands above in the VS Code terminal. When switchin
 ## Project Files
 
 - `main.cpp`: Application entry point, COM lifetime, and message loop.
-- `AppWindow.h` / `AppWindow.cpp`: Window creation, keyboard input, and capture status display.
-- `AudioCapture.h` / `AudioCapture.cpp`: Microphone initialization, packet capture, and audio resource cleanup.
+- `AppWindow.h` / `AppWindow.cpp`: Status window, pitch keys, and push-to-talk key binding.
+- `AudioEngine.h` / `AudioEngine.cpp`: Device selection, capture and render streams, and the real-time audio thread.
+- `PitchShifter.h` / `PitchShifter.cpp`: Low-latency pitch shifter (two crossfaded delay-line taps).
 - `CMakeLists.txt`: Compiler options, the Windows GUI executable configuration, and system library dependencies.
 - `build/`: Local build directory, ignored by Git. CMake-generated Visual Studio project files also go here and do not need to be committed.
 
