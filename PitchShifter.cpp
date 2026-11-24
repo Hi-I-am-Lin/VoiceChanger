@@ -1,14 +1,13 @@
 #include "PitchShifter.h"
 
-#include <algorithm>
 #include <cmath>
 
 namespace
 {
-constexpr float PI = 3.14159265358979f;
+    constexpr float PI = 3.14159265358979f;
 
-// Keeps linear interpolation from reading the sample that is being overwritten.
-constexpr float MIN_DELAY_SAMPLES = 2.0f;
+    // Keeps linear interpolation from reading the sample that is being overwritten.
+    constexpr float MIN_DELAY_SAMPLES = 2.0f;
 }
 
 void PitchShifter::Prepare(double sampleRate, double windowMs)
@@ -75,8 +74,7 @@ float PitchShifter::Process(float input)
         // A tap is silent exactly when its delay jumps across the window edge.
         const float s1 = std::sin(PI * phase_);
         const float s2 = std::sin(PI * phase2);
-        output = s1 * s1 * ReadDelayed(phase_ * windowSamples_ + MIN_DELAY_SAMPLES)
-            + s2 * s2 * ReadDelayed(phase2 * windowSamples_ + MIN_DELAY_SAMPLES);
+        output = s1 * s1 * ReadDelayed(phase_ * windowSamples_ + MIN_DELAY_SAMPLES) + s2 * s2 * ReadDelayed(phase2 * windowSamples_ + MIN_DELAY_SAMPLES);
     }
 
     writeIndex_ = (writeIndex_ + 1) & mask_;
